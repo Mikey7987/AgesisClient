@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "aegis",
+  "version": "${version}",
+  "name": "Aegis Showcase",
+  "description": "Client-side combat-module showcase with an animated ClickGUI. Intended for private local worlds.",
+  "authors": ["Showcase"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.showcase.aegis.client.AegisClient"]
+  },
+  "mixins": ["aegis.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.18.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
