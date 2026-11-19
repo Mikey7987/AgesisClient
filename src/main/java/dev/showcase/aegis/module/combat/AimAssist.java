@@ -16,7 +16,7 @@ import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
 /**
- * Frame-rate independent, human-like aim assistance.
+ * Frame-rate independent camera assistance with configurable axis speeds and smoothing.
  *
  * <p>Runs once per rendered frame (not per 20 Hz tick). Rotation is applied through
  * {@code Entity#changeLookDirection}, the same call the mouse uses, so the vanilla camera
@@ -26,8 +26,12 @@ public final class AimAssist extends Module {
 	/** Vanilla converts cursor units to degrees with this factor. */
 	private static final float CURSOR_TO_DEGREES = 0.15f;
 
-	public final ModeSetting mode = add(new ModeSetting("Mode", "Smooth", "Linear", "Smooth", "Balanced"));
+	public final ModeSetting mode = add(new ModeSetting("Movement Mode", "Smooth", "Smooth", "Linear", "Balanced"));
 	public final SliderSetting smoothness = add(new SliderSetting("Smoothness", 45, 1, 100, 0.5, 1, ""));
+	public final SliderSetting horizontalSpeed = add(new SliderSetting("Horizontal Speed", 70, 0, 100, 1, 0, "%"));
+	public final SliderSetting verticalSpeed = add(new SliderSetting("Vertical Speed", 55, 0, 100, 1, 0, "%"));
+	public final SliderSetting jitterReduction = add(new SliderSetting("Jitter Reduction", 40, 0, 100, 1, 0, "%"));
+	public final SliderSetting transitionSmoothing = add(new SliderSetting("Transition Smoothing", 35, 0, 100, 1, 0, "%"));
 	public final SliderSetting reaction = add(new SliderSetting("Reaction Time", 80, 0, 300, 5, 0, "ms"));
 	public final SliderSetting overshoot = add(new SliderSetting("Overshoot", 8, 0, 30, 1, 0, "%"));
 	public final SliderSetting fov = add(new SliderSetting("FOV", 90, 10, 180, 1, 0, "°"));
@@ -36,13 +40,13 @@ public final class AimAssist extends Module {
 	public final ToggleSetting weaponOnly = add(new ToggleSetting("Weapon Only", true));
 	public final ToggleSetting playersOnly = add(new ToggleSetting("Players Only", true));
 	public final ToggleSetting requireClick = add(new ToggleSetting("Require Click", true));
-	public final ToggleSetting horizontalOnly = add(new ToggleSetting("Horizontal Only", false));
 
 	// target state
 	private LivingEntity target;
 	private LivingEntity lastTarget;
 	private long targetLostNs;
 	private Vec3d smoothPoint;
+	private float filteredYawStep, filteredPitchStep;
 
 	// reaction state
 	private long reactionUntilNs;
@@ -75,6 +79,8 @@ public final class AimAssist extends Module {
 		}
 		target = null;
 		smoothPoint = null;
+		filteredYawStep = 0f;
+		filteredPitchStep = 0f;
 		swingPending = false;
 		overshootPhase = 2;
 		prevMagnitude = 0f;
@@ -120,6 +126,8 @@ public final class AimAssist extends Module {
 			boolean quickReacquire = best == lastTarget && now - targetLostNs < Time.ms(250);
 			target = best;
 			smoothPoint = null;
+			filteredYawStep = 0f;
+			filteredPitchStep = 0f;
 			overshootPhase = 2;
 			if (!quickReacquire) startReaction(now);
 		}
@@ -127,7 +135,8 @@ public final class AimAssist extends Module {
 
 		// ---- aim point, low-passed so 20 Hz entity position steps never reach the camera ----
 		Vec3d raw = CombatUtil.aimPoint(target);
-		smoothPoint = smoothPoint == null ? raw : smoothPoint.lerp(raw, 1.0 - Math.exp(-28.0 * dt));
+		double filterRate = 28.0 - jitterReduction.getDouble() * 0.20;
+		smoothPoint = smoothPoint == null ? raw : smoothPoint.lerp(raw, 1.0 - Math.exp(-filterRate * dt));
 
 		double dx = smoothPoint.x - eye.x;
 		double dy = smoothPoint.y - eye.y;
@@ -137,7 +146,7 @@ public final class AimAssist extends Module {
 		float targetPitch = (float) -Math.toDegrees(Math.atan2(dy, horizontal));
 
 		float dYaw = MathHelper.wrapDegrees(targetYaw - p.getYaw());
-		float dPitch = horizontalOnly.isOn() ? 0f : targetPitch - p.getPitch();
+		float dPitch = targetPitch - p.getPitch();
 		float magnitude = (float) Math.hypot(dYaw, dPitch);
 
 		// ---- rapid direction change -> human delay again ----
@@ -183,10 +192,16 @@ public final class AimAssist extends Module {
 		float step = computeStep(vMag, magnitude, dt);
 		if (step <= 0f) return;
 		float k = step / vMag;
-		float stepYaw = vYaw * k;
-		float stepPitch = horizontalOnly.isOn() ? 0f : vPitch * k;
+		float desiredYaw = vYaw * k * (horizontalSpeed.getFloat() / 100f);
+		float desiredPitch = vPitch * k * (verticalSpeed.getFloat() / 100f);
+		float transitionRate = 5f + (100f - transitionSmoothing.getFloat()) * 0.28f;
+		filteredYawStep = horizontalSpeed.getFloat() <= 0f ? 0f
+				: MathUtil.lerp(filteredYawStep, desiredYaw, transitionRate, dt);
+		filteredPitchStep = verticalSpeed.getFloat() <= 0f ? 0f
+				: MathUtil.lerp(filteredPitchStep, desiredPitch, transitionRate, dt);
+		if (Math.abs(filteredYawStep) < 0.0005f && Math.abs(filteredPitchStep) < 0.0005f) return;
 
-		p.changeLookDirection(stepYaw / CURSOR_TO_DEGREES, stepPitch / CURSOR_TO_DEGREES);
+		p.changeLookDirection(filteredYawStep / CURSOR_TO_DEGREES, filteredPitchStep / CURSOR_TO_DEGREES);
 	}
 
 	private void startReaction(long now) {
@@ -206,7 +221,7 @@ public final class AimAssist extends Module {
 		if (pct > 0f && magnitude > 12f) {
 			float amount = pct * Math.min(magnitude, 70f);
 			overshootYaw = dYaw / magnitude * amount;
-			overshootPitch = horizontalOnly.isOn() ? 0f : dPitch / magnitude * amount;
+			overshootPitch = dPitch / magnitude * amount;
 			overshootMagnitude = (float) Math.hypot(overshootYaw, overshootPitch);
 			overshootPhase = 0;
 		}
