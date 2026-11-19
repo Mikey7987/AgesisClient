@@ -64,7 +64,7 @@ public final class AimAssist extends Module {
 	private long lastMouseMoveNs;
 
 	public AimAssist() {
-		super("AimAssist", "Smooth, human-like camera assistance towards targets.", Category.COMBAT);
+		super("AimAssist", "Configurable camera movement with independent axis speeds and smoothing.", Category.COMBAT);
 	}
 
 	@Override
